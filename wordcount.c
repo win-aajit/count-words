@@ -1,53 +1,140 @@
-#include <ctype.h>
-#include <stdio.h>
-#include <errno.h>
-#include <fcntl.h>
 #include <unistd.h>
-#include <stdbool.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <dirent.h>
+#include <sys/stat.h>
+#include <ctype.h>
+#include <fcntl.h>
+
+#define CHUNKSIZE 10240
+
+typedef struct{
+	char* word;
+	int count;
+}WordCount;
+
+int processFile(const char* filename, WordCount* wordCounts, int* totalCount){
+	int fd = open(filename, O_RDONLY);
+
+	if(fd == -1){
+		printf("Error");
+		return;
+	}
+
+	char buf [1];
+	char * wordBuffer = malloc(CHUNKSIZE * sizeof(char));
+	int bufferSize = 10240;
+	int wordIndex = 0;
+
+	while(read(fd, buf, 1) > 0) {
+		if(isalpha(buf[0]) || buf[0] == '\''){
+			wordBuffer[wordIndex++] = buf[0];
+		}
+		else if(buf[0] == '-' && wordIndex > 0 && isalpha(wordBuffer[wordIndex-1])){
+			wordBuffer[wordIndex++] = buf[0];
+		}
+		else if(wordIndex > 0){ //end of word
+			if(wordBuffer[wordIndex - 1] == '-'){
+				wordBuffer[wordIndex--] = '\0';
+			}
+			else{
+				wordBuffer[wordIndex] = '\0';
+			}
+
+			int i;
+			for(i = 0; i < *totalCount; i++){
+				if(strcmp(wordCounts[i].word, wordBuffer) == 0){
+					wordCounts[i].count++;
+					break;
+				}
+			}
+
+			if(i == *totalCount){
+				wordCounts[i].word = strdup(wordBuffer);
+				wordCounts[i].count = 1;
+				(*totalCount)++;
+			}
+
+			wordIndex = 0;
+		}
+	}
+	close(fd);
+}
+
+void processDirectory(const char* dirname, WordCount* wordCounts, int* totalCount){
+	DIR* dir = opendir(dirname);
+
+	if(dir == NULL){
+		perror("Error opening dir");
+		return;
+	}
+
+	struct dirent *entry;
+
+	while ((entry = readdir(dir))!= NULL) {
+		if(entry->d_type == DT_REG && strcmp(entry->d_name + strlen(entry->d_name)-4, ".txt") == 0){
+			char path[1024];
+			int x = snprintf(path, sizeof(path), "%s/%s\n", dirname, entry->d_name);
+			write(STDOUT_FILENO, path, x);
+			processFile(path, wordCounts, totalCount);
+		}
+		else if(entry->d_type == DT_DIR && strcmp(entry->d_name, ".") != 0 && strcmp(entry->d_name, "..")!= 0){
+			char subdir[1024];
+			int x = snprintf(subdir, sizeof(subdir), "%s/%s\n", dirname, entry->d_name);
+			printf("1");
+			write(STDOUT_FILENO, subdir, x);
+			processDirectory(subdir, wordCounts, totalCount);
+
+		}
+	}
+	closedir(dir);
+}
+
+
+int cmpWords(void* x, void* y){
+	WordCount* wordX = (WordCount*)x;
+	WordCount *wordY = (WordCount *)y;
+    if (wordX->count == wordY->count) {
+        return strcmp(wordX->word, wordY->word);
+    }
+    return wordY->count - wordX->count;
+}
+
+void writeWords(WordCount* wordCounts, int totalCount){
+	qsort(wordCounts,totalCount, sizeof(WordCount), cmpWords);
+	printf("4");
+	for(int i = 0; i < totalCount; i++) {
+		char buf[1024];
+		int z = snprintf(buf, sizeof(buf), "%s: %d\n", wordCounts[i].word, wordCounts[i].count);
+		write(STDOUT_FILENO, buf, z);
+	}
+}
+
+
 
 int main(int argc, char* argv[]){
-
-	if(argc !=(1||2)){
-		printf("Error: Expected one argument, found %d", argc-1);
-		return -1;
-	}
-	char c;
-	int count = 0;
-	int numLines = 0;
-	int numChars = 0;
-	int numWords = 0;
-	bool prevWhite = true;
-	int fd = open(argv[1],O_RDONLY);
-	if(fd==-1){
-		printf("Error: the given filename \"%s\" does not exist", argv[1]);
-		return -1;
+	if(argc < 2){
+		perror("Not enough arguments\n");
+		//return -1;
 	}
 
-	while( read(fd, &c, 1) > 0){
-		count++;
-		if(c == '\n') {
-			numLines++;
-			numChars++;
-			prevWhite = true;
-		}
-		else if(isspace(c)){
-			numChars++;
-			prevWhite = true;
-		}
-		else if(isprint(c)){
-			if(prevWhite){
-				numWords++;
+	WordCount *wordCounts = malloc(CHUNKSIZE * sizeof(WordCount));
+	int totalCount = 0;
+	for(int i = 1; i < argc; i++){
+		struct stat fStat;
+		if(stat(argv[i], &fStat) == 0){
+			if(S_ISDIR(fStat.st_mode)){
+				processDirectory(argv[i], wordCounts, &totalCount);
 			}
-			numChars++;
-			prevWhite = false;
+			else{
+				processFile(argv[i], wordCounts, &totalCount);
+			}
+		}
+		else{
+			perror("Error fetching");
 		}
 	}
-	if(count == 0){
-		printf("0 0 0 %s\n", argv[1]);
-		return 0;
-		}
-	if(c != '\n') numLines++;
-	close(fd);
-	printf("%d %d %d %s\n",numLines, numWords, numChars, argv[1]);
+	writeWords(wordCounts, totalCount);
 	return 0;
 }
